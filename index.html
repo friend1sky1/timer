@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>流程计时器</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="title">流程计时器</h1>
+    <button id="fullscreenBtn" class="ghost-btn" type="button" title="全屏（投屏用）">⛶ 全屏</button>
+  </header>
+
+  <main class="stage">
+    <!-- 左栏：可视化倒计时 + 控制 -->
+    <div class="main-col">
+      <div class="ring-wrap" id="ringWrap">
+        <svg class="ring" viewBox="0 0 300 300" aria-hidden="true">
+          <circle class="ring-track" cx="150" cy="150" r="138"></circle>
+          <circle class="ring-progress" id="ringProgress" cx="150" cy="150" r="138"></circle>
+        </svg>
+        <div class="ring-center">
+          <div class="time" id="timeDisplay">--:--</div>
+          <div class="state" id="stateText">选好时间线，点开始</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn" class="primary-btn" type="button">开始流程</button>
+        <button id="skipBtn" class="ghost-btn" type="button" title="跳过当前事件">跳过</button>
+        <button id="resetBtn" class="ghost-btn" type="button" title="回到第一个事件">重置</button>
+      </div>
+
+      <div class="options">
+        <label class="opt" for="ringtoneSel">到点铃声
+          <select id="ringtoneSel">
+            <option value="bell" selected>下课铃</option>
+            <option value="soft">轻柔音</option>
+            <option value="none">静音</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- 右栏：时间线（事件行，可拖拽排序） -->
+    <section class="timeline" aria-label="时间线">
+      <div class="timeline-head">
+        <h2>时间线</h2>
+        <span class="dim" id="timelineInfo"></span>
+        <button id="resetEventsBtn" class="ghost-btn small" type="button">恢复默认</button>
+      </div>
+      <div class="timeline-list" id="timeline"></div>
+
+      <form id="eventForm" class="event-form" autocomplete="off">
+        <input id="eventName" class="event-name" placeholder="＋ 事件名，如：情境导入" maxlength="12" required>
+        <label class="opt num-field"><input type="number" id="eventMin" min="0" max="599" value="0"> 分</label>
+        <label class="opt num-field"><input type="number" id="eventSec" min="0" max="59" value="0"> 秒</label>
+        <button type="submit" class="ghost-btn">＋ 添加</button>
+      </form>
+      <p class="hint">宽度按时长成比例 · 拖动调整顺序 · 拖到圆环即启动 · 悬停 × 删除</p>
+    </section>
+  </main>
+
+  <footer class="foot">v0.3 原型 · 无广告 · 流程自动接力</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
