@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>流程计时器</title>
+  <style>
+/* 流程计时器 v0.3 —— 深色投屏友好主题 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --line: #30363d;
+  --text: #e6edf3;
+  --dim: #8b949e;
+  --accent: #2f81f7;
+  --accent-soft: #58a6ff;
+  --good: #3fb950;
+  --warn: #d29922;
+  --bad: #f85149;
+}
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;          /* 根除垂直滚动条：内容一屏放下 */
+  overscroll-behavior: none; /* 阻止 iOS/触控板橡皮筋回弹 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 顶栏 */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.title { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+
+/* 主舞台：窄屏单列；宽屏（≥900px）两栏 grid，见 media query */
+.stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 18px;
+  max-width: 520px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* 左栏容器 */
+.main-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* 大圆环：宽度受视口高度约束（窄屏 500px 预算），max 兑底防极矮窗口负宽；也是拖放启动区 */
+.ring-wrap { position: relative; width: min(78vw, 320px, max(140px, calc(100vh - 500px))); aspect-ratio: 1; transition: transform 0.15s; }
+.ring-wrap.drop-hover { transform: scale(1.03); }
+.ring-wrap.drop-hover .ring-progress { stroke: var(--good); }
+.ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: var(--line); stroke-width: 12; }
+.ring-progress {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 12;
+  stroke-linecap: round;
+  stroke-dasharray: 867; /* 2πr, r=138 */
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.2s linear, stroke 0.3s;
+}
+.ring-wrap.running .ring-progress { stroke: var(--accent); }
+.ring-wrap.warn .ring-progress { stroke: var(--warn); }
+.ring-wrap.done .ring-progress { stroke: var(--bad); }
+
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  min-width: 0;
+}
+.time {
+  font-size: clamp(34px, 11vw, 72px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.state { color: var(--dim); font-size: 14px; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state.done { color: var(--bad); font-weight: 600; }
+
+/* 控制按钮 */
+.controls { display: flex; gap: 10px; width: 100%; max-width: 420px; }
+.primary-btn {
+  flex: 1;
+  padding: 14px 0;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.primary-btn:active { transform: scale(0.98); }
+.primary-btn.paused { background: var(--good); }
+
+.ghost-btn {
+  padding: 10px 14px;
+  font-size: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.ghost-btn:active { transform: scale(0.98); }
+.ghost-btn.small { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
+
+/* 选项 */
+.options {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  max-width: 420px;
+  color: var(--dim);
+  font-size: 13px;
+}
+.opt { display: flex; align-items: center; gap: 6px; }
+.opt select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+.dim { color: var(--dim); }
+
+/* 时间线 */
+.timeline { width: 100%; max-width: 420px; }
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.timeline-head h2 { font-size: 13px; color: var(--dim); font-weight: 500; }
+
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 事件行（甘特图式）：手柄 + 名称标签 + 时长条（真实比例） */
+.event-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: grab;
+  user-select: none;
+}
+.event-row:active { cursor: grabbing; }
+.event-row.dragging { opacity: 0.5; cursor: grabbing; }
+.event-row.active .event-label { color: var(--accent-soft); font-weight: 600; }
+
+.drag-handle {
+  flex: 0 0 12px;
+  color: var(--dim);
+  font-size: 15px;
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", system-ui, sans-serif; /* ⠿ 符号回退 */
+  cursor: grab;
+  user-select: none;
+}
+
+.event-label {
+  flex: 0 0 70px;   /* 固定名称列（窄屏） */
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+/* 时长条：flex-grow 由 JS 按秒数设置 → 真实比例（100min 是 5min 的 20 倍宽） */
+.event-bar {
+  position: relative;
+  flex-grow: 0;
+  flex-basis: 0;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.event-bar-dur {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 玻璃管进度：在时长条内，无自身圆角，靠 overflow hidden 裁剪 → 涂色与圆角矩形严丝合缝 */
+.event-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(180deg, #ffd24a, #ff8a00); /* 亮金 → 活力橙，鲜明有活力 */
+  pointer-events: none;
+  transition: width 0.2s linear;
+}
+
+.event-del {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  text-align: center;
+  background: var(--bad);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  display: none;
+  user-select: none;
+}
+.event-row:hover .event-del { display: block; }
+
+/* 添加事件表单：虚线边框 + 区分底色，与列表方块明显不同 */
+.event-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--dim);
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.4);
+}
+.event-form .event-name {
+  flex: 1 1 130px;
+  padding: 10px;
+  font-size: 15px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.event-form .opt { white-space: nowrap; }
+.event-form input[type="number"] {
+  width: 60px;
+  padding: 8px;
+  font-size: 15px;
+  text-align: center;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.hint { margin-top: 8px; color: var(--dim); font-size: 12px; text-align: center; }
+
+.foot {
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* 窄屏（<900px）：单列，甘特图基线样式已适配（label 70px），无需额外覆盖 */
+
+/* 宽屏（≥900px）：两栏 grid，左大圆环 + 右时间线（剪视频软件式布局） */
+@media (min-width: 900px) {
+  .stage {
+    max-width: 1400px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+    gap: 32px;
+    align-items: start;
+  }
+  .main-col { gap: 14px; }
+  .ring-wrap { width: min(40vw, 440px, max(180px, calc(100vh - 260px))); }
+  .controls { max-width: 440px; }
+  .options { max-width: 440px; }
+  .timeline { width: 100%; max-width: none; }
+  /* 宽屏甘特图：名称列加宽、间距拉大、时长条更舒展 */
+  .event-row { gap: 8px; }
+  .drag-handle { flex-basis: 16px; font-size: 17px; }
+  .event-label { flex-basis: 96px; font-size: 13px; }
+  .event-bar { min-width: 6px; }
+}
+
+/* 全屏态：左大圆环 + 右时间线（两栏保留，学生/观众能看整体流程与当前进度）；
+   只隐藏编辑类元素（顶栏/控制按钮/铃声/表单/手柄/删除钮/恢复默认） */
+:fullscreen .topbar,
+:fullscreen .options,
+:fullscreen .controls,
+:fullscreen .event-form,
+:fullscreen .hint,
+:fullscreen .foot,
+:fullscreen .drag-handle,
+:fullscreen .event-del,
+:fullscreen .resetEventsBtn { display: none; }
+body:fullscreen .topbar,
+body:fullscreen .options,
+body:fullscreen .controls,
+body:fullscreen .event-form,
+body:fullscreen .hint,
+body:fullscreen .foot,
+body:fullscreen .drag-handle,
+body:fullscreen .event-del,
+body:fullscreen .resetEventsBtn { display: none; }
+
+:fullscreen .stage,
+body:fullscreen .stage {
+  display: grid; /* 保持两栏 grid */
+  gap: 28px;
+  padding: 24px;
+  max-width: none;
+  align-items: center;
+}
+:fullscreen .main-col,
+body:fullscreen .main-col { width: 100%; }
+:fullscreen .ring-wrap,
+body:fullscreen .ring-wrap { width: min(64vh, 92%); }
+:fullscreen .time,
+body:fullscreen .time { font-size: clamp(56px, 14vh, 130px); }
+:fullscreen .state,
+body:fullscreen .state { font-size: 20px; color: var(--dim); max-width: none; }
+:fullscreen .timeline,
+body:fullscreen .timeline { width: 100%; max-width: none; }
+
+/* 时间到：整体闪烁提示 */
+.ring-wrap.done { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="title">流程计时器</h1>
+    <button id="fullscreenBtn" class="ghost-btn" type="button" title="全屏（投屏用）">⛶ 全屏</button>
+  </header>
+
+  <main class="stage">
+    <!-- 左栏：可视化倒计时 + 控制 -->
+    <div class="main-col">
+      <div class="ring-wrap" id="ringWrap">
+        <svg class="ring" viewBox="0 0 300 300" aria-hidden="true">
+          <circle class="ring-track" cx="150" cy="150" r="138"></circle>
+          <circle class="ring-progress" id="ringProgress" cx="150" cy="150" r="138"></circle>
+        </svg>
+        <div class="ring-center">
+          <div class="time" id="timeDisplay">--:--</div>
+          <div class="state" id="stateText">选好时间线，点开始</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn" class="primary-btn" type="button">开始流程</button>
+        <button id="skipBtn" class="ghost-btn" type="button" title="跳过当前事件">跳过</button>
+        <button id="resetBtn" class="ghost-btn" type="button" title="回到第一个事件">重置</button>
+      </div>
+
+      <div class="options">
+        <label class="opt" for="ringtoneSel">到点铃声
+          <select id="ringtoneSel">
+            <option value="bell" selected>下课铃</option>
+            <option value="soft">轻柔音</option>
+            <option value="none">静音</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- 右栏：时间线（事件行，可拖拽排序） -->
+    <section class="timeline" aria-label="时间线">
+      <div class="timeline-head">
+        <h2>时间线</h2>
+        <span class="dim" id="timelineInfo"></span>
+        <button id="resetEventsBtn" class="ghost-btn small" type="button">恢复默认</button>
+      </div>
+      <div class="timeline-list" id="timeline"></div>
+
+      <form id="eventForm" class="event-form" autocomplete="off">
+        <input id="eventName" class="event-name" placeholder="＋ 事件名，如：情境导入" maxlength="12" required>
+        <label class="opt num-field"><input type="number" id="eventMin" min="0" max="599" value="0"> 分</label>
+        <label class="opt num-field"><input type="number" id="eventSec" min="0" max="59" value="0"> 秒</label>
+        <button type="submit" class="ghost-btn">＋ 添加</button>
+      </form>
+      <p class="hint">宽度按时长成比例 · 拖动调整顺序 · 拖到圆环即启动 · 悬停 × 删除</p>
+    </section>
+  </main>
+
+  <footer class="foot">v0.3 原型 · 无广告 · 流程自动接力</footer>
+
+  <script>
+/* 流程计时器 v0.3 —— 事件方块时间线：拖拽排序 + 自动连播。无广告，离线可用 */
+(function () {
+  'use strict';
+
+  /* ---------- 纯逻辑 ---------- */
+  function formatTime(totalSec) {
+    const s = Math.max(0, Math.ceil(totalSec));
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    return mm + ':' + ss;
+  }
+
+  function formatDur(min, sec) {
+    return min > 0 ? min + '分' + (sec > 0 ? sec + '秒' : '') : sec + '秒';
+  }
+
+  /* 方块内短时长：30min / 5min30s / 45s */
+  function formatDurShort(min, sec) {
+    if (min === 0) return sec + 's';
+    if (sec === 0) return min + 'min';
+    return min + 'min' + sec + 's';
+  }
+
+  /* ---------- 默认时间线（上课五环节模板） ---------- */
+  const DEFAULT_EVENTS = [
+    { id: 'e1', name: '情境导入', min: 5, sec: 0 },
+    { id: 'e2', name: '核心输入', min: 100, sec: 0 },
+    { id: 'e3', name: '强制休息', min: 15, sec: 0 },
+    { id: 'e4', name: '实战输出', min: 90, sec: 0 },
+    { id: 'e5', name: '总结答疑', min: 30, sec: 0 }
+  ];
+
+  /* ---------- DOM ---------- */
+  const $ = (id) => document.getElementById(id);
+  const ringWrap = $('ringWrap');
+  const ringProgress = $('ringProgress');
+  const timeDisplay = $('timeDisplay');
+  const stateText = $('stateText');
+  const startBtn = $('startBtn');
+  const skipBtn = $('skipBtn');
+  const resetBtn = $('resetBtn');
+  const fullscreenBtn = $('fullscreenBtn');
+  const ringtoneSel = $('ringtoneSel');
+  const timeline = $('timeline');
+  const timelineInfo = $('timelineInfo');
+  const eventForm = $('eventForm');
+  const eventName = $('eventName');
+  const eventMin = $('eventMin');
+  const eventSec = $('eventSec');
+  const resetEventsBtn = $('resetEventsBtn');
+
+  const CIRCUM = 2 * Math.PI * 138; // 与 SVG r=138 对应
+  ringProgress.style.strokeDasharray = CIRCUM;
+
+  /* ---------- 事件存储 ---------- */
+  let events = loadEvents();
+  let dragIndex = null;
+
+  function loadEvents() {
+    try {
+      const raw = localStorage.getItem('timeline-v1');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length > 0) return arr;
+      }
+    } catch (e) { /* 忽略损坏数据 */ }
+    return DEFAULT_EVENTS.map(function (s) { return Object.assign({}, s); });
+  }
+
+  function saveEvents() {
+    try { localStorage.setItem('timeline-v1', JSON.stringify(events)); } catch (e) { /* 忽略 */ }
+  }
+
+  /* ---------- 播放状态 ---------- */
+  let total = 0;          // 当前事件总秒数
+  let remain = 0;         // 剩余秒数
+  let endAt = 0;
+  let timerId = null;    // setInterval 句柄（用 interval 而非 rAF：后台标签页也能计时响铃）
+  let currentIndex = 0;   // 当前事件下标
+  let state = 'idle';     // idle | running | paused | done
+  let audioCtx = null;
+  let switchTimer = null;  // 事件切换延时句柄（需统一清理，防止延迟回调复活状态机）
+
+  /* ---------- 铃声（Web Audio，首次点击初始化） ---------- */
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audioCtx = new AC();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  function beep(freq, delay, dur, vol, fade) {
+    const t0 = audioCtx.currentTime + delay;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.03);
+    if (fade) {
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    } else {
+      gain.gain.setValueAtTime(vol, t0 + dur * 0.7);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    }
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
+  }
+
+  function playRingtone(kind) {
+    ensureAudio(); // 响铃前保险恢复音频上下文（可能因系统策略进入 suspended）
+    if (kind === 'none' || !audioCtx) return;
+    if (kind === 'bell') {
+      // 上课铃：三连音组 ×3 轮，明显持久（总长约 4.5 秒）
+      for (let round = 0; round < 3; round++) {
+        const base = round * 1.5;
+        beep(880, base, 0.4, 0.6);
+        beep(880, base + 0.5, 0.4, 0.6);
+        beep(1174.66, base + 1.0, 0.5, 0.6);
+      }
+    } else {
+      // 轻柔音：两段渐弱，柔和持久（总长约 3.6 秒）
+      beep(523.25, 0, 1.2, 0.3, true);
+      beep(523.25, 1.6, 1.2, 0.3, true);
+    }
+  }
+
+  /* 铃声总时长（毫秒），用于自动切换的等待时间 */
+  function ringtoneDuration() {
+    const kind = ringtoneSel.value;
+    if (kind === 'bell') return 4600;
+    if (kind === 'soft') return 3800;
+    return 600; // 静音也稍等，避免瞬间切走
+  }
+
+  /* 更新当前方块进度（已用比例填充玻璃管） */
+  function updateProgress() {
+    const p = document.querySelector('.event-row.active .event-progress');
+    if (!p || total <= 0) return;
+    const done = total - remain;
+    const pct = Math.min(100, Math.max(0, done / total * 100));
+    p.style.width = pct + '%';
+  }
+
+  /* ---------- 界面更新 ---------- */
+  function render() {
+    const ratio = total > 0 ? remain / total : 0;
+    ringProgress.style.strokeDashoffset = String(CIRCUM * (1 - ratio));
+    timeDisplay.textContent = formatTime(remain);
+    updateProgress();
+
+    ringWrap.classList.remove('warn', 'done', 'running');
+    stateText.classList.remove('done');
+
+    if (state === 'running') {
+      ringWrap.classList.add('running');
+      if (remain <= 60) ringWrap.classList.add('warn');
+      startBtn.textContent = '暂停';
+      startBtn.classList.remove('paused');
+    } else if (state === 'paused') {
+      stateText.textContent = '已暂停';
+      startBtn.textContent = '继续';
+      startBtn.classList.add('paused');
+    } else if (state === 'done') {
+      ringWrap.classList.add('done');
+      stateText.textContent = '流程完成！';
+      stateText.classList.add('done');
+      startBtn.textContent = '重新开始';
+      startBtn.classList.remove('paused');
+    } else {
+      startBtn.textContent = '开始流程';
+      startBtn.classList.remove('paused');
+    }
+
+    if (state === 'running' || state === 'paused') {
+      const ev = events[currentIndex];
+      if (ev) {
+        const seq = (currentIndex + 1) + '/' + events.length;
+        stateText.textContent = ev.name + ' · ' + seq;
+      }
+    }
+  }
+
+  function updateTimelineInfo() {
+    let totalSec = 0;
+    events.forEach(function (ev) { totalSec += ev.min * 60 + ev.sec; });
+    const totalMin = Math.round(totalSec / 60);
+    timelineInfo.textContent = events.length + ' 个事件 · 共 ' + totalMin + ' 分钟';
+  }
+
+  /* ---------- 主循环（setInterval 200ms + 时间戳，后台标签页照常走） ---------- */
+  function tick() {
+    remain = Math.max(0, (endAt - Date.now()) / 1000);
+    render();
+    if (remain <= 0) {
+      clearInterval(timerId); // 到点先停 interval，防止重复触发 onEventEnd（多次响铃）
+      onEventEnd();
+    }
+  }
+
+  function startCurrent() {
+    clearTimeout(switchTimer);
+    clearInterval(timerId);
+    const ev = events[currentIndex];
+    if (!ev) { finishFlow(); return; }
+    total = ev.min * 60 + ev.sec;
+    remain = total;
+    state = 'running';
+    endAt = Date.now() + remain * 1000;
+    renderTimeline();
+    render();
+    tick();
+    timerId = setInterval(tick, 200);
+  }
+
+  function onEventEnd() {
+    playRingtone(ringtoneSel.value);
+    if (currentIndex + 1 < events.length) {
+      currentIndex++;
+      // 等铃声播完再进下一个（避免上一事件铃声未响完就切换）
+      switchTimer = setTimeout(startCurrent, ringtoneDuration());
+    } else {
+      finishFlow();
+    }
+  }
+
+  function finishFlow() {
+    clearTimeout(switchTimer);
+    clearInterval(timerId);
+    state = 'done';
+    remain = 0;
+    renderTimeline();
+    render();
+  }
+
+  function pauseFlow() {
+    if (state !== 'running') return;
+    clearTimeout(switchTimer);
+    clearInterval(timerId);
+    state = 'paused';
+    remain = Math.max(0, (endAt - Date.now()) / 1000);
+    render();
+  }
+
+  function resetFlow() {
+    clearTimeout(switchTimer);
+    clearInterval(timerId);
+    state = 'idle';
+    currentIndex = 0;
+    const ev = events[0];
+    total = ev ? ev.min * 60 + ev.sec : 0;
+    remain = total;
+    renderTimeline();
+    render();
+  }
+
+  function skipTo(index) {
+    if (index < 0 || index >= events.length) return;
+    clearTimeout(switchTimer);
+    currentIndex = index;
+    if (state === 'running' || state === 'paused') {
+      startCurrent();
+    } else {
+      state = 'idle';
+      const ev = events[index];
+      total = ev ? ev.min * 60 + ev.sec : 0;
+      remain = total;
+      renderTimeline();
+      render();
+    }
+  }
+
+  /* 拖入圆环：直接启动该事件（视频剪辑式交互） */
+  function dropToStart(index) {
+    if (index < 0 || index >= events.length) return;
+    clearTimeout(switchTimer);
+    currentIndex = index;
+    ensureAudio(); // drop 属于用户手势，可初始化/恢复音频
+    startCurrent();
+  }
+
+  /* ---------- 时间线渲染与操作 ---------- */
+  function renderTimeline() {
+    timeline.innerHTML = '';
+    events.forEach(function (ev, i) {
+      const row = document.createElement('div');
+      row.className = 'event-row';
+      const isActive = i === currentIndex && (state === 'running' || state === 'paused');
+      if (isActive) row.classList.add('active');
+      row.draggable = true;
+      row.title = ev.name + ' ' + formatDur(ev.min, ev.sec);
+
+      // 拖拽手柄
+      const handle = document.createElement('span');
+      handle.className = 'drag-handle';
+      handle.textContent = '⠿';
+
+      // 名称标签（固定列，完整显示）
+      const label = document.createElement('span');
+      label.className = 'event-label';
+      label.textContent = ev.name;
+
+      // 时长条（真实比例：flex-grow = 总秒数，100min 是 5min 的 20 倍宽）
+      const bar = document.createElement('div');
+      bar.className = 'event-bar';
+      bar.style.flexGrow = String(ev.min * 60 + ev.sec);
+
+      // 时长文字（条内右侧，条窄时被裁剪）
+      const barDur = document.createElement('span');
+      barDur.className = 'event-bar-dur';
+      barDur.textContent = formatDurShort(ev.min, ev.sec);
+
+      // 进度填充（玻璃管）
+      const progress = document.createElement('div');
+      progress.className = 'event-progress';
+
+      bar.appendChild(progress);
+      bar.appendChild(barDur);
+
+      // 删除
+      const del = document.createElement('span');
+      del.className = 'event-del';
+      del.textContent = '×';
+      del.title = '删除';
+      del.addEventListener('click', function (e) {
+        e.stopPropagation();
+        removeEvent(i);
+      });
+
+      row.appendChild(handle);
+      row.appendChild(label);
+      row.appendChild(bar);
+      row.appendChild(del);
+
+      // 点击：跳转到该事件（播放中=切到该事件）
+      row.addEventListener('click', function () {
+        if (state === 'running' || state === 'paused') skipTo(i);
+      });
+      // 拖拽排序（HTML5 DnD）
+      row.addEventListener('dragstart', function (e) {
+        dragIndex = i;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(i));
+      });
+      row.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+      row.addEventListener('drop', function (e) {
+        e.preventDefault();
+        if (dragIndex === null || dragIndex === i) return;
+        const from = dragIndex;
+        const to = i;
+        const moved = events.splice(from, 1)[0];
+        events.splice(to, 0, moved);
+        if (from === currentIndex) currentIndex = to; // 拖走当前事件：跟走
+        else if (from < currentIndex && to >= currentIndex) currentIndex--;
+        else if (from > currentIndex && to <= currentIndex) currentIndex++;
+        saveEvents();
+        renderTimeline();
+      });
+      row.addEventListener('dragend', function () {
+        row.classList.remove('dragging');
+        dragIndex = null;
+      });
+
+      timeline.appendChild(row);
+    });
+    updateTimelineInfo();
+  }
+
+  function removeEvent(index) {
+    if (events.length <= 1) return; // 至少保留一个事件
+    clearTimeout(switchTimer);
+    const removingCurrent = index === currentIndex;
+    events.splice(index, 1);
+    if (index < currentIndex) currentIndex--;
+    if (currentIndex >= events.length) currentIndex = events.length - 1;
+    if (removingCurrent && (state === 'running' || state === 'paused')) {
+      startCurrent(); // 删除正在播放的事件：切到下一个
+    } else {
+      const ev = events[currentIndex] || events[0];
+      total = ev ? ev.min * 60 + ev.sec : 0;
+      remain = total;
+    }
+    saveEvents();
+    renderTimeline();
+    render();
+  }
+
+  function addEvent(name, min, sec) {
+    events.push({ id: 'u' + Date.now(), name: name, min: min, sec: sec });
+    saveEvents();
+    renderTimeline();
+  }
+
+  function resetEvents() {
+    clearTimeout(switchTimer);
+    events = DEFAULT_EVENTS.map(function (s) { return Object.assign({}, s); });
+    currentIndex = 0;
+    saveEvents();
+    renderTimeline();
+    render();
+  }
+
+  /* ---------- 事件 ---------- */
+  startBtn.addEventListener('click', function () {
+    if (state === 'running') pauseFlow();
+    else if (state === 'done') { resetFlow(); startCurrent(); }
+    else if (state === 'paused') startCurrent();
+    else {
+      ensureAudio();
+      startCurrent();
+    }
+  });
+
+  skipBtn.addEventListener('click', function () {
+    if (events.length === 0) return;
+    if (currentIndex + 1 < events.length) skipTo(currentIndex + 1);
+    else finishFlow();
+  });
+
+  resetBtn.addEventListener('click', resetFlow);
+
+  fullscreenBtn.addEventListener('click', function () {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(function () {});
+    } else {
+      document.exitFullscreen().catch(function () {});
+    }
+  });
+
+  eventForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    const name = eventName.value.trim();
+    const m = Math.max(0, parseInt(eventMin.value, 10) || 0);
+    const s = Math.max(0, Math.min(59, parseInt(eventSec.value, 10) || 0));
+    if (!name) { eventName.focus(); return; }
+    if (m + s <= 0) {
+      eventMin.focus();
+      return; // 0 分 0 秒不添加，提示用户填时长
+    }
+    addEvent(name, m, s);
+    eventName.value = '';
+    eventName.focus();
+  });
+
+  resetEventsBtn.addEventListener('click', resetEvents);
+
+  /* 圆环作为启动区：拖入事件方块即启用倒计时 */
+  let dragEnterCount = 0;
+  ringWrap.addEventListener('dragenter', function (e) {
+    e.preventDefault();
+    dragEnterCount++;
+    ringWrap.classList.add('drop-hover');
+  });
+  ringWrap.addEventListener('dragleave', function () {
+    dragEnterCount--;
+    if (dragEnterCount <= 0) {
+      dragEnterCount = 0;
+      ringWrap.classList.remove('drop-hover');
+    }
+  });
+  ringWrap.addEventListener('dragover', function (e) {
+    e.preventDefault(); // 允许 drop
+  });
+  ringWrap.addEventListener('drop', function (e) {
+    e.preventDefault();
+    dragEnterCount = 0;
+    ringWrap.classList.remove('drop-hover');
+    dropToStart(dragIndex);
+  });
+
+  // 键盘：空格 开始/暂停；→ 下一个；← 上一个
+  document.addEventListener('keydown', function (e) {
+    if (e.target.matches('input, select, button')) return;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      startBtn.click();
+    } else if (e.code === 'ArrowRight') {
+      e.preventDefault();
+      skipBtn.click();
+    } else if (e.code === 'ArrowLeft') {
+      e.preventDefault();
+      if (currentIndex > 0) skipTo(currentIndex - 1);
+    }
+  });
+
+  /* ---------- 初始 ---------- */
+  renderTimeline();
+  resetFlow();
+})();
+
+</script>
+</body>
+</html>
